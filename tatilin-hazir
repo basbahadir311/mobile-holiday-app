@@ -1,0 +1,408 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useEffect, useState } from "react";
+import {
+  Alert,
+  Dimensions,
+  FlatList,
+  Keyboard,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View
+} from "react-native";
+
+// --- REKLAM ENTEGRASYONU BAŞLANGICI ---
+import { InterstitialAd, AdEventType, TestIds } from 'react-native-google-mobile-ads';
+
+// Test aşamasında TestIds.INTERSTITIAL kullanılır. 
+// Canlıya alırken 'ca-app-pub-xxx...' şeklindeki ID'nizi yazın.
+const adUnitId = __DEV__ ? TestIds.INTERSTITIAL : 'ca-app-pub-xxxxxxxxxxxxxxxx/xxxxxxxxxx';
+
+const interstitial = InterstitialAd.createForAdRequest(adUnitId, {
+  requestNonPersonalizedAdsOnly: true,
+  keywords: ['travel', 'vacation', 'trip'],
+});
+// --- REKLAM ENTEGRASYONU SONU ---
+
+const { width } = Dimensions.get("window");
+
+const itemEmojis = {
+  "Mayo": "🩱", "Havlu": "🧣", "Güneş kremi": "🧴", "Şapka": "👒", "Güneş gözlüğü": "🕶️",
+  "Şarj aleti": "🔌", "Rahat ayakkabı": "👟", "Kulaklık": "🎧", "Sırt çantası": "🎒",
+  "Rehber kitap": "📖", "Fener": "🔦", "Powerbank": "🔋", "Çadır": "🏕️", "Uyku tulumu": "🛌",
+  "Yağmurluk": "🧥", "Bot": "🥾", "Hiking ayakkabı": "🥾", "Termos": "☕", "Harita": "🗺️",
+  "Mont": "🧥", "Eldiven": "🧤", "Atkı": "🧣", "Bere": "🧢", "Kayak gözlüğü": "🥽",
+  "Dalış malzemesi": "🤿", "Tırmanış ipi": "🪢", "Kask": "⛑️", "Kürek": "🛶", "Outdoor ayakkabı": "🥾"
+};
+
+const presets = {
+  deniz: ["Mayo", "Havlu", "Güneş kremi", "Şapka", "Güneş gözlüğü"],
+  şehir: ["Şarj aleti", "Rahat ayakkabı", "Kulaklık", "Sırt çantası", "Rehber kitap"],
+  kamp: ["Fener", "Powerbank", "Çadır", "Uyku tulumu", "Yağmurluk"],
+  doga: ["Bot", "Hiking ayakkabı", "Sırt çantası", "Termos", "Harita"],
+  kış: ["Mont", "Eldiven", "Atkı", "Bere", "Kayak gözlüğü"],
+  macera: ["Dalış malzemesi", "Tırmanış ipi", "Kask", "Kürek", "Outdoor ayakkabı"]
+};
+
+export default function App() {
+  const [screen, setScreen] = useState("login");
+  const [items, setItems] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [selectedType, setSelectedType] = useState("deniz");
+  const [customName, setCustomName] = useState("");
+  const [startDate, setStartDate] = useState(new Date());
+  const [endDate, setEndDate] = useState(new Date());
+  const [budgetLimit, setBudgetLimit] = useState(0);
+  const [history, setHistory] = useState([]);
+  const [borclar, setBorclar] = useState([]);
+
+  // Modallar
+  const [isNewTripModalVisible, setNewTripModalVisible] = useState(false);
+  const [isPreviewModalVisible, setPreviewModalVisible] = useState(false);
+  const [selectedHistory, setSelectedHistory] = useState(null);
+
+  // Geçici Girdiler
+  const [tempName, setTempName] = useState("");
+  const [tempBudget, setTempBudget] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState("start");
+  const [newItem, setNewItem] = useState("");
+  const [person, setPerson] = useState("");
+  const [amount, setAmount] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("Ulaşım");
+
+  // --- REKLAM STATE VE LOGIC ---
+  const [adLoaded, setAdLoaded] = useState(false);
+
+  useEffect(() => {
+    const unsubscribeLoaded = interstitial.addAdEventListener(AdEventType.LOADED, () => {
+      setAdLoaded(true);
+    });
+    const unsubscribeClosed = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
+      setAdLoaded(false);
+      interstitial.load(); // Reklam kapatılınca yenisini yükle
+    });
+
+    interstitial.load();
+
+    return () => {
+      unsubscribeLoaded();
+      unsubscribeClosed();
+    };
+  }, []);
+  // --- REKLAM LOGIC SONU ---
+
+  // İlk Yükleme
+  useEffect(() => {
+    const loadData = async () => {
+      const data = await Promise.all([
+        AsyncStorage.getItem("items"), AsyncStorage.getItem("expenses"),
+        AsyncStorage.getItem("history"), AsyncStorage.getItem("customName"),
+        AsyncStorage.getItem("startDate"), AsyncStorage.getItem("endDate"),
+        AsyncStorage.getItem("selectedType"), AsyncStorage.getItem("budgetLimit")
+      ]);
+      if (data[0]) setItems(JSON.parse(data[0]));
+      if (data[1]) setExpenses(JSON.parse(data[1]));
+      if (data[2]) setHistory(JSON.parse(data[2]));
+      if (data[3]) setCustomName(data[3]);
+      if (data[4]) setStartDate(new Date(data[4]));
+      if (data[5]) setEndDate(new Date(data[5]));
+      if (data[6]) setSelectedType(data[6]);
+      if (data[7]) setBudgetLimit(parseFloat(data[7]));
+    };
+    loadData();
+  }, []);
+
+  // Veri Kaydetme ve Borç Hesaplama
+  useEffect(() => {
+    AsyncStorage.setItem("items", JSON.stringify(items));
+    AsyncStorage.setItem("expenses", JSON.stringify(expenses));
+    AsyncStorage.setItem("history", JSON.stringify(history));
+    AsyncStorage.setItem("customName", customName);
+    AsyncStorage.setItem("startDate", startDate.toISOString());
+    AsyncStorage.setItem("endDate", endDate.toISOString());
+    AsyncStorage.setItem("selectedType", selectedType);
+    AsyncStorage.setItem("budgetLimit", budgetLimit.toString());
+
+    const p = [...new Set(expenses.map(e => e.person))];
+    if (p.length > 0) {
+      const avg = expenses.reduce((s, e) => s + e.amount, 0) / p.length;
+      setBorclar(p.map(name => ({
+        name,
+        balance: expenses.filter(e => e.person === name).reduce((s, e) => s + e.amount, 0) - avg
+      })));
+    } else { setBorclar([]); }
+  }, [items, expenses, history, customName, startDate, endDate, budgetLimit]);
+
+  // Yeni Tatil Modalını Sıfırlayarak Aç
+  const openNewTripModal = () => {
+    setTempName("");
+    setTempBudget("");
+    setStartDate(new Date());
+    setEndDate(new Date());
+    setSelectedType("deniz");
+    setNewTripModalVisible(true);
+  };
+
+  const startTrip = () => {
+    if (!tempName) return Alert.alert("Hata", "Lütfen tatile bir isim verin.");
+    setCustomName(tempName);
+    setBudgetLimit(parseFloat(tempBudget) || 0);
+    setItems(presets[selectedType].map(n => ({ name: n, packed: false })));
+    setExpenses([]);
+    setNewTripModalVisible(false);
+    setScreen("packing");
+    Keyboard.dismiss();
+  };
+
+  const onDateChange = (event, selectedDate) => {
+    setShowPicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      if (pickerMode === "start") setStartDate(selectedDate);
+      else setEndDate(selectedDate);
+    }
+  };
+
+  // Tatili Bitir ve Kaydet Fonksiyonu (Reklam Tetikleyici)
+  const finishTripWithAd = () => {
+    Alert.alert("Kaydet", "Tatil tamamlansın mı?", [
+      { text: "Hayır" },
+      { 
+        text: "Evet", 
+        onPress: () => {
+          // Reklam yüklüyse göster
+          if (adLoaded) {
+            interstitial.show();
+          }
+          // Kayıt işlemleri
+          setHistory([{ customName, startDate: startDate.toLocaleDateString('tr-TR'), endDate: endDate.toLocaleDateString('tr-TR'), items, expenses, type: selectedType }, ...history]);
+          setItems([]); 
+          setExpenses([]); 
+          setCustomName(""); 
+          setScreen("login");
+        } 
+      }
+    ]);
+  };
+
+  const renderLogin = () => (
+    <SafeAreaView style={styles.center}>
+      <Text style={styles.title}>Tatilin Hazır ✈️</Text>
+      {items.length > 0 && (
+        <TouchableOpacity style={[styles.mainBtn, { backgroundColor: '#0EA5E9', width: '80%', marginBottom: 15 }]} onPress={() => setScreen("packing")}>
+          <Text style={styles.btnText}>🚀 Mevcut Tatile Devam Et</Text>
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity style={[styles.mainBtn, { width: '80%', marginBottom: 15 }]} onPress={openNewTripModal}>
+        <Text style={styles.btnText}>➕ Yeni Tatil Planla</Text>
+      </TouchableOpacity>
+      {history.length > 0 && (
+        <TouchableOpacity style={[styles.mainBtn, { backgroundColor: "#64748B", width: '80%' }]} onPress={() => setScreen("history")}>
+          <Text style={styles.btnText}>📚 Geçmiş Tatillerim</Text>
+        </TouchableOpacity>
+      )}
+
+      <Modal visible={isNewTripModalVisible} animationType="slide" transparent={true}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Yolculuk Planla</Text>
+              <Text style={styles.label}>Tatil İsmi</Text>
+              <TextInput style={styles.input} placeholder="Ege Turu..." placeholderTextColor="#94A3B8" value={tempName} onChangeText={setTempName} />
+              
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 }}>
+                <TouchableOpacity style={styles.dateSelector} onPress={() => { setPickerMode("start"); setShowPicker(true); }}>
+                  <Text style={styles.label}>Başlangıç</Text>
+                  <Text style={styles.dateText}>{startDate.toLocaleDateString('tr-TR')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.dateSelector} onPress={() => { setPickerMode("end"); setShowPicker(true); }}>
+                  <Text style={styles.label}>Bitiş</Text>
+                  <Text style={styles.dateText}>{endDate.toLocaleDateString('tr-TR')}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.label, { marginTop: 15 }]}>Bütçe (₺)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" placeholder="0" placeholderTextColor="#94A3B8" value={tempBudget} onChangeText={setTempBudget} />
+
+              <Text style={[styles.label, { marginTop: 15 }]}>Konsept Seçin</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 10 }}>
+                {Object.keys(presets).map(type => (
+                  <TouchableOpacity key={type} onPress={() => setSelectedType(type)} style={[styles.typeBadge, selectedType === type && styles.selectedBadge]}>
+                    <Text style={{ fontSize: 24, textAlign: 'center' }}>{type === 'deniz' ? '🏖️' : type === 'şehir' ? '🏙️' : type === 'kamp' ? '🏕️' : type === 'doga' ? '🌲' : type === 'kış' ? '⛷️' : '🧗'}</Text>
+                    <Text style={{ fontSize: 10, textAlign: 'center', color: '#1E293B', textTransform: 'capitalize' }}>{type}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <TouchableOpacity style={[styles.mainBtn, { marginTop: 10 }]} onPress={startTrip}><Text style={styles.btnText}>Başlat</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.mainBtn, { backgroundColor: '#EF4444', marginTop: 15 }]} onPress={() => setNewTripModalVisible(false)}><Text style={styles.btnText}>İptal</Text></TouchableOpacity>
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+      {showPicker && <DateTimePicker value={pickerMode === "start" ? startDate : endDate} mode="date" display="default" onChange={onDateChange} />}
+    </SafeAreaView>
+  );
+
+  if (screen === "packing") {
+    const percent = items.length ? Math.round((items.filter(i => i.packed).length / items.length) * 100) : 0;
+    return (
+      <SafeAreaView style={styles.container}>
+        <FlatList
+          data={items}
+          ListHeaderComponent={
+            <View style={styles.card}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <View><Text style={styles.cardTitle}>{customName}</Text><Text style={styles.cardSub}>{startDate.toLocaleDateString('tr-TR')} - {endDate.toLocaleDateString('tr-TR')}</Text></View>
+                <TouchableOpacity onPress={() => setScreen("login")}><Text style={{ color: '#0EA5E9', fontWeight: 'bold' }}>Menü</Text></TouchableOpacity>
+              </View>
+              <Text style={styles.progressText}>Valiz Hazırlığı: %{percent}</Text>
+              <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${percent}%` }]} /></View>
+            </View>
+          }
+          renderItem={({ item, index }) => (
+            <View style={styles.listItemCard}>
+              <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => { const c = [...items]; c[index].packed = !c[index].packed; setItems(c); }}>
+                <Text style={{ fontSize: 18, marginRight: 10 }}>{item.packed ? "✅" : "⬜"}</Text>
+                <Text style={{ color: item.packed ? '#94A3B8' : '#1E293B', fontSize: 16 }}>{itemEmojis[item.name] || "📦"} {item.name}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { const c = [...items]; c.splice(index, 1); setItems(c); }}><Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Sil</Text></TouchableOpacity>
+            </View>
+          )}
+          ListFooterComponent={
+            <View style={styles.card}>
+              <TextInput placeholder="Yeni eşya ekle..." placeholderTextColor="#94A3B8" value={newItem} onChangeText={setNewItem} style={styles.input} />
+              <TouchableOpacity style={[styles.mainBtn, { marginTop: 15 }]} onPress={() => { if (!newItem) return; setItems([...items, { name: newItem, packed: false }]); setNewItem(""); Keyboard.dismiss(); }}><Text style={styles.btnText}>Ekle</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.mainBtn, { backgroundColor: '#F59E0B', marginTop: 15 }]} onPress={() => setScreen("expense")}><Text style={styles.btnText}>Harcamalar</Text></TouchableOpacity>
+              
+              {/* Reklamlı Buton Buraya Entegre Edildi */}
+              <TouchableOpacity 
+                style={[styles.mainBtn, { backgroundColor: '#059669', marginTop: 15 }]} 
+                onPress={finishTripWithAd}
+              >
+                <Text style={styles.btnText}>Tatili Tamamla ve Kaydet</Text>
+              </TouchableOpacity>
+            </View>
+          }
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (screen === "expense") return (
+    <SafeAreaView style={styles.container}>
+      <FlatList
+        data={expenses}
+        ListHeaderComponent={
+          <View>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Bütçe: {expenses.reduce((s, e) => s + e.amount, 0)}₺ / {budgetLimit}₺</Text>
+              <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${Math.min((expenses.reduce((s, e) => s + e.amount, 0)/budgetLimit)*100, 100)}%`, backgroundColor: expenses.reduce((s, e) => s + e.amount, 0) > budgetLimit ? '#EF4444' : '#14B8A6' }]} /></View>
+            </View>
+            <View style={styles.card}>
+              <TextInput placeholder="Kim ödedi?" placeholderTextColor="#94A3B8" value={person} onChangeText={setPerson} style={styles.input} />
+              <TextInput placeholder="Miktar (₺)" placeholderTextColor="#94A3B8" keyboardType="numeric" value={amount} onChangeText={setAmount} style={styles.input} />
+              
+              <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15, flexWrap: 'wrap'}}>
+                  {["Ulaşım", "Konaklama", "Yemek", "Eğlence"].map((cat) => (
+                    <TouchableOpacity 
+                      key={cat} 
+                      onPress={() => setSelectedCategory(cat)}
+                      style={[styles.textCategoryBtn, selectedCategory === cat && {borderColor: '#14B8A6'}]}
+                    >
+                      <Text style={[styles.textCategoryText, selectedCategory === cat && {color: '#14B8A6'}]}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+              </View>
+
+              <TouchableOpacity style={[styles.mainBtn, { marginTop: 15 }]} onPress={() => { if (!person || !amount) return; setExpenses([...expenses, { person, amount: parseFloat(amount), category: selectedCategory }]); setPerson(""); setAmount(""); Keyboard.dismiss(); }}><Text style={styles.btnText}>Ekle</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.mainBtn, { backgroundColor: '#64748B', marginTop: 10 }]} onPress={() => setScreen("packing")}><Text style={styles.btnText}>Geri Dön</Text></TouchableOpacity>
+            </View>
+          </View>
+        }
+        renderItem={({ item, index }) => (
+          <View style={styles.listItemCard}>
+            <View>
+              <Text style={{ fontWeight: 'bold', color: '#1E293B' }}>{item.person}: {item.amount}₺</Text>
+              <Text style={{ fontSize: 12, color: '#64748B' }}>{item.category}</Text>
+            </View>
+            <TouchableOpacity onPress={() => { const c = [...expenses]; c.splice(index, 1); setExpenses(c); }}><Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Sil</Text></TouchableOpacity>
+          </View>
+        )}
+        ListFooterComponent={
+          <View style={styles.card}><Text style={styles.sectionTitle}>⚖️ Borç Durumu</Text>{borclar.map((b, i) => <Text key={i} style={{ color: b.balance >= 0 ? '#059669' : '#DC2626', fontWeight: 'bold', marginBottom: 5 }}>{b.name}: {b.balance.toFixed(2)}₺</Text>)}</View>
+        }
+      />
+    </SafeAreaView>
+  );
+
+  if (screen === "history") return (
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.bigTitle}>Geçmiş Tatiller</Text>
+      <FlatList data={history} renderItem={({ item, index }) => (
+        <TouchableOpacity style={styles.card} onPress={() => { setSelectedHistory(item); setPreviewModalVisible(true); }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <View><Text style={{ fontWeight: 'bold', color: '#1E293B', fontSize: 18 }}>{item.customName}</Text><Text style={{ color: '#64748B' }}>{item.startDate} - {item.endDate}</Text></View>
+            <TouchableOpacity onPress={() => { const c = [...history]; c.splice(index, 1); setHistory(c); }}><Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Sil</Text></TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      )} ListFooterComponent={<TouchableOpacity style={styles.mainBtn} onPress={() => setScreen("login")}><Text style={styles.btnText}>Geri Dön</Text></TouchableOpacity>} />
+
+      <Modal visible={isPreviewModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{selectedHistory?.customName}</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              <Text style={styles.label}>Eşyalar:</Text>
+              {selectedHistory?.items.map((it, i) => <Text key={i} style={{color: '#1E293B'}}>{it.packed ? "✅" : "⬜"} {it.name}</Text>)}
+              <Text style={[styles.label, {marginTop: 15}]}>Harcamalar:</Text>
+              {selectedHistory?.expenses.map((ex, i) => (
+                <View key={i} style={{marginBottom: 5}}>
+                   <Text style={{color: '#1E293B'}}>{ex.person}: {ex.amount}₺ ({ex.category || "Genel"})</Text>
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[styles.mainBtn, {marginTop: 20}]} onPress={() => setPreviewModalVisible(false)}><Text style={styles.btnText}>Kapat</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+
+  return renderLogin();
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#F1F5F9", padding: 20 },
+  center: { flex: 1, backgroundColor: "#F1F5F9", justifyContent: "center", alignItems: "center" },
+  title: { fontSize: 32, fontWeight: "bold", marginBottom: 30, color: '#1E293B' },
+  bigTitle: { fontSize: 24, fontWeight: "bold", marginBottom: 20, color: '#1E293B' },
+  card: { backgroundColor: "white", padding: 20, borderRadius: 20, marginBottom: 20, elevation: 4 },
+  cardTitle: { fontSize: 22, fontWeight: 'bold', color: '#1E293B' },
+  cardSub: { color: '#64748B', fontSize: 14 },
+  sectionTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 15, color: '#1E293B' },
+  input: { borderWidth: 1, borderColor: "#E2E8F0", padding: 12, borderRadius: 12, marginTop: 10, color: '#1E293B' },
+  label: { fontSize: 13, fontWeight: 'bold', color: '#64748B' },
+  dateSelector: { width: '48%', backgroundColor: '#F8FAFC', padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0', alignItems: 'center' },
+  dateText: { color: '#1E293B', fontWeight: 'bold', marginTop: 4 },
+  mainBtn: { backgroundColor: "#14B8A6", padding: 16, borderRadius: 16, alignItems: "center", width: '100%' },
+  btnText: { color: "white", fontWeight: "bold" },
+  listItemCard: { padding: 16, backgroundColor: "white", borderRadius: 15, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderLeftWidth: 5, borderLeftColor: '#14B8A6' },
+  progressBg: { height: 10, backgroundColor: "#E2E8F0", borderRadius: 5, overflow: "hidden", marginTop: 10 },
+  progressFill: { height: 10, backgroundColor: "#14B8A6" },
+  progressText: { fontWeight: "bold", marginTop: 15, color: "#1E293B" },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { backgroundColor: 'white', padding: 25, borderRadius: 25, width: width * 0.9 },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
+  typeBadge: { padding: 10, borderRadius: 15, backgroundColor: '#F1F5F9', marginRight: 10, minWidth: 60 },
+  selectedBadge: { backgroundColor: '#CCFBF1', borderWidth: 1, borderColor: '#14B8A6' },
+  textCategoryBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 5 },
+  textCategoryText: { fontSize: 12, color: '#64748B', fontWeight: 'bold' }
+});
